@@ -10,7 +10,10 @@ declare global {
   }
 }
 
-function getSourceType(url: string): 'm3u8' | 'flv' | 'native' {
+type SourceType = 'm3u8' | 'flv' | 'native';
+
+function getSourceType(url: string, explicitType?: SourceType): SourceType {
+  if (explicitType) return explicitType;
   const lower = url.toLowerCase();
   const path = lower.split('?')[0];
   // 代理地址通常是 /api/proxy/vod/m3u8?url=...，真实 m3u8 在 query 中；
@@ -61,6 +64,7 @@ export default function TVNativeVideo({
   playbackRate = 1,
   startTime = 0,
   command,
+  sourceType,
   className = '',
 }: {
   url: string;
@@ -75,6 +79,7 @@ export default function TVNativeVideo({
   playbackRate?: number;
   startTime?: number;
   command?: number;
+  sourceType?: SourceType;
   className?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -164,7 +169,7 @@ export default function TVNativeVideo({
 
     async function attach() {
       cleanup();
-      const type = getSourceType(url);
+      const type = getSourceType(url, sourceType);
 
       try {
         if (type === 'm3u8' && !videoEl.canPlayType('application/vnd.apple.mpegurl')) {
@@ -315,7 +320,7 @@ export default function TVNativeVideo({
       clearBuffering();
       cleanup();
     };
-  }, [url, live, startTime, adFilterEnabled, playbackRate]);
+  }, [url, live, startTime, adFilterEnabled, playbackRate, sourceType]);
 
   useEffect(() => {
     const video = videoRef.current;

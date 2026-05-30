@@ -12,6 +12,7 @@ import TVVirtualRemote from '@/components/tv/TVVirtualRemote';
 type LiveSource = { key: string; name: string; proxyMode?: 'full' | 'm3u8-only' | 'direct' };
 type LiveChannel = { id: string; tvgId?: string; name: string; logo?: string; group?: string; url: string };
 type EpgProgram = { start: string; end: string; title: string };
+type TVPlayerSourceType = 'm3u8' | 'flv' | 'native';
 
 function getLogoUrl(logo?: string, source?: string) {
   if (!logo) return '';
@@ -19,12 +20,51 @@ function getLogoUrl(logo?: string, source?: string) {
   return `/api/proxy/logo?url=${encodeURIComponent(logo)}&source=${encodeURIComponent(source)}`;
 }
 
-async function resolveLiveUrl(rawUrl: string, source?: LiveSource | null) {
-  const proxyMode = source?.proxyMode || 'full';
+function getUrlSourceType(rawUrl: string): TVPlayerSourceType | 'unknown' {
   const lower = rawUrl.toLowerCase();
-  const isM3u8 = lower.includes('.m3u8') || lower.includes('.m3u');
-  if (!isM3u8 || proxyMode === 'direct') return rawUrl;
-  return `/api/proxy/m3u8?url=${encodeURIComponent(rawUrl)}&moontv-source=${encodeURIComponent(source?.key || '')}`;
+  const path = lower.split('?')[0];
+  if (path.endsWith('.m3u8') || path.endsWith('.m3u') || lower.includes('.m3u8') || lower.includes('.m3u')) return 'm3u8';
+  if (path.endsWith('.flv') || lower.includes('.flv?')) return 'flv';
+  if (/\.(mp4|webm|ogv|ogg|mov)(\?.*)?$/.test(path)) return 'native';
+  return 'unknown';
+}
+
+async function resolveLiveUrl(rawUrl: string, source?: LiveSource | null): Promise<{ url: string; type: TVPlayerSourceType }> {
+  const proxyMode = source?.proxyMode || 'full';
+  const sourceType = getUrlSourceType(rawUrl);
+
+  if (sourceType === 'm3u8') {
+    return {
+      type: 'm3u8',
+      url: proxyMode === 'direct'
+        ? rawUrl
+        : `/api/proxy/m3u8?url=${encodeURIComponent(rawUrl)}&moontv-source=${encodeURIComponent(source?.key || '')}`,
+    };
+  }
+  if (sourceType === 'flv') return { type: 'flv', url: rawUrl };
+  if (sourceType === 'native') return { type: 'native', url: rawUrl };
+
+  if (!source?.key) throw new Error('未知直播流格式');
+
+  const precheckRes = await fetch(
+    `/api/live/precheck?url=${encodeURIComponent(rawUrl)}&moontv-source=${encodeURIComponent(source.key)}`,
+    { cache: 'no-store' }
+  );
+  if (!precheckRes.ok) throw new Error('不支持的直播流格式');
+  const precheck = await precheckRes.json();
+
+  if (precheck?.type === 'flv') return { type: 'flv', url: rawUrl };
+  if (precheck?.type === 'mp4') return { type: 'native', url: rawUrl };
+  if (precheck?.type === 'm3u8') {
+    return {
+      type: 'm3u8',
+      url: proxyMode === 'direct'
+        ? rawUrl
+        : `/api/proxy/m3u8?url=${encodeURIComponent(rawUrl)}&moontv-source=${encodeURIComponent(source.key)}`,
+    };
+  }
+
+  throw new Error('不支持的直播流格式');
 }
 
 function TVLivePlayClient() {
@@ -38,6 +78,8 @@ function TVLivePlayClient() {
   const [channels, setChannels] = useState<LiveChannel[]>([]);
   const [channel, setChannel] = useState<LiveChannel | null>(null);
   const [videoUrl, setVideoUrl] = useState('');
+  const [videoType, setVideoType] = useState<TVPlayerSourceType | undefined>();
+  const [unsupportedError, setUnsupportedError] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showPanel, setShowPanel] = useState(true);
@@ -112,9 +154,20 @@ function TVLivePlayClient() {
     let alive = true;
     if (!channel) return;
     setVideoUrl('');
+    setVideoType(undefined);
+    setUnsupportedError('');
     setPlaybackError(false);
     setRetryCount(0);
-    resolveLiveUrl(channel.url, source).then((url) => alive && setVideoUrl(url));
+    resolveLiveUrl(channel.url, source)
+      .then(({ url, type }) => {
+        if (!alive) return;
+        setVideoType(type);
+        setVideoUrl(url);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setUnsupportedError(err instanceof Error ? err.message : '不支持的直播流格式');
+      });
     if (source) {
       savePlayRecord(`live_${source.key}`, `live_${channel.id}`, {
         title: channel.name,
@@ -162,7 +215,14 @@ function TVLivePlayClient() {
       setRetryCount((value) => value + 1);
       setPlaybackError(false);
       setVideoUrl('');
-      resolveLiveUrl(channel.url, source).then(setVideoUrl).catch(() => setPlaybackError(true));
+      setVideoType(undefined);
+      setUnsupportedError('');
+      resolveLiveUrl(channel.url, source)
+        .then(({ url, type }) => {
+          setVideoType(type);
+          setVideoUrl(url);
+        })
+        .catch((err) => setUnsupportedError(err instanceof Error ? err.message : '不支持的直播流格式'));
     }, 2200);
     return () => window.clearTimeout(timer);
   }, [channel, playbackError, retryCount, source]);
@@ -328,7 +388,16 @@ function TVLivePlayClient() {
 
   return (
     <main data-tv-player-root className='fixed inset-0 overflow-hidden bg-black text-white' onMouseMove={() => setShowPanel(true)}>
-      {videoUrl ? <TVNativeVideo key={videoUrl} url={videoUrl} poster={getLogoUrl(channel.logo, source?.key)} live title={channel.name} onError={() => setPlaybackError(true)} /> : <div className='flex h-full items-center justify-center text-3xl font-bold'><Loader2 className='mr-4 h-10 w-10 animate-spin text-rose-500' />正在解析直播地址...</div>}
+      {unsupportedError ? (
+        <div role='alert' className='flex h-full items-center justify-center bg-black p-10 text-center text-white'>
+          <section className='max-w-3xl rounded-[36px] border border-amber-500/40 bg-slate-950/92 p-9 shadow-2xl shadow-black/70'>
+            <AlertTriangle className='mx-auto mb-5 h-14 w-14 text-amber-300' />
+            <h2 className='text-4xl font-black'>当前直播流格式不支持</h2>
+            <p className='mt-3 text-2xl text-slate-300'>{unsupportedError}</p>
+            <button onClick={() => setShowPanel(true)} className='tv-focusable mt-8 rounded-2xl bg-white/10 px-7 py-4 text-2xl font-black outline-none focus:ring-4 focus:ring-white/40'>频道列表</button>
+          </section>
+        </div>
+      ) : videoUrl ? <TVNativeVideo key={`${videoType || 'auto'}:${videoUrl}`} url={videoUrl} sourceType={videoType} poster={getLogoUrl(channel.logo, source?.key)} live title={channel.name} onError={() => setPlaybackError(true)} /> : <div className='flex h-full items-center justify-center text-3xl font-bold'><Loader2 className='mr-4 h-10 w-10 animate-spin text-rose-500' />正在解析直播地址...</div>}
 
       {playbackError && (
         <div role='alert' className='absolute inset-0 z-30 flex items-center justify-center bg-black/72 p-8 text-white backdrop-blur-sm'>
@@ -337,7 +406,7 @@ function TVLivePlayClient() {
             <h2 className='text-4xl font-black'>当前频道播放失败</h2>
             <p className='mt-3 text-2xl text-slate-300'>{retryCount < 3 ? `正在自动重连（${retryCount + 1}/3）...` : '可以重试当前频道，或打开频道面板切换频道/直播源。'}</p>
             <div className='mt-8 flex justify-center gap-4'>
-              <button onClick={() => { setPlaybackError(false); setVideoUrl(''); if (channel) resolveLiveUrl(channel.url, source).then(setVideoUrl); }} className='tv-focusable flex cursor-pointer items-center gap-3 rounded-2xl bg-rose-600 px-7 py-4 text-2xl font-black outline-none focus:ring-4 focus:ring-rose-300'><RotateCcw className='h-7 w-7' />重试</button>
+              <button onClick={() => { setPlaybackError(false); setUnsupportedError(''); setVideoUrl(''); setVideoType(undefined); if (channel) resolveLiveUrl(channel.url, source).then(({ url, type }) => { setVideoType(type); setVideoUrl(url); }).catch((err) => setUnsupportedError(err instanceof Error ? err.message : '不支持的直播流格式')); }} className='tv-focusable flex cursor-pointer items-center gap-3 rounded-2xl bg-rose-600 px-7 py-4 text-2xl font-black outline-none focus:ring-4 focus:ring-rose-300'><RotateCcw className='h-7 w-7' />重试</button>
               <button onClick={() => { setPlaybackError(false); setShowPanel(true); }} className='tv-focusable rounded-2xl bg-white/10 px-7 py-4 text-2xl font-black outline-none focus:ring-4 focus:ring-white/40'>频道列表</button>
             </div>
           </section>
