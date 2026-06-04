@@ -208,6 +208,7 @@ export const UserMenu: React.FC = () => {
   const [exactSearch, setExactSearch] = useState(true);
   const [maxConcurrentDownloads, setMaxConcurrentDownloads] = useState(6);
   const [downloadThreadsPerTask, setDownloadThreadsPerTask] = useState(6);
+  const [downloadSegmentTimeout, setDownloadSegmentTimeout] = useState(30000);
   const [downloadMode, setDownloadMode] = useState<'browser' | 'filesystem'>(
     'browser'
   );
@@ -822,6 +823,17 @@ export const UserMenu: React.FC = () => {
       );
       if (savedDownloadThreadsPerTask !== null) {
         setDownloadThreadsPerTask(Number(savedDownloadThreadsPerTask));
+      }
+
+      // 加载分片下载超时设置
+      const savedDownloadSegmentTimeout = localStorage.getItem(
+        'downloadSegmentTimeout'
+      );
+      if (savedDownloadSegmentTimeout !== null) {
+        const timeout = Number(savedDownloadSegmentTimeout);
+        if (Number.isFinite(timeout)) {
+          setDownloadSegmentTimeout(Math.min(Math.max(timeout, 30000), 300000));
+        }
       }
 
       // 加载下载模式设置
@@ -1589,6 +1601,24 @@ export const UserMenu: React.FC = () => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('downloadThreadsPerTask', String(value));
     }
+  };
+
+  const handleDownloadSegmentTimeoutChange = (value: number) => {
+    const normalizedValue = Math.min(Math.max(value, 30000), 300000);
+    setDownloadSegmentTimeout(normalizedValue);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('downloadSegmentTimeout', String(normalizedValue));
+    }
+  };
+
+  const formatDownloadSegmentTimeout = (value: number) => {
+    if (value < 60000) {
+      return `${Math.round(value / 1000)}秒`;
+    }
+
+    const minutes = Math.floor(value / 60000);
+    const seconds = Math.round((value % 60000) / 1000);
+    return seconds > 0 ? `${minutes}分${seconds}秒` : `${minutes}分钟`;
   };
 
   const handleDownloadModeChange = (mode: 'browser' | 'filesystem') => {
@@ -3466,6 +3496,80 @@ export const UserMenu: React.FC = () => {
                         }`}
                       >
                         32个
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 分片下载超时 */}
+                  <div className='space-y-2'>
+                    <div>
+                      <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                        分片下载超时
+                      </h4>
+                      <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                        单个分片超过该时间仍未完成时会自动判定超时并按原分片重试
+                      </p>
+                    </div>
+                    <div className='flex items-center justify-between'>
+                      <span className='text-xs text-gray-600 dark:text-gray-400'>
+                        超时时间
+                      </span>
+                      <span className='text-xs font-medium text-gray-700 dark:text-gray-300'>
+                        {formatDownloadSegmentTimeout(downloadSegmentTimeout)}
+                      </span>
+                    </div>
+                    <div className='flex items-center gap-2'>
+                      <input
+                        type='range'
+                        min='30000'
+                        max='300000'
+                        step='10000'
+                        value={downloadSegmentTimeout}
+                        onChange={(e) =>
+                          handleDownloadSegmentTimeoutChange(
+                            Number(e.target.value)
+                          )
+                        }
+                        className='flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700'
+                        style={{
+                          background: `linear-gradient(to right, #10b981 0%, #10b981 ${
+                            ((downloadSegmentTimeout - 30000) / (300000 - 30000)) * 100
+                          }%, #e5e7eb ${
+                            ((downloadSegmentTimeout - 30000) / (300000 - 30000)) * 100
+                          }%, #e5e7eb 100%)`,
+                        }}
+                      />
+                    </div>
+                    <div className='flex justify-between text-xs text-gray-500 dark:text-gray-400'>
+                      <button
+                        onClick={() => handleDownloadSegmentTimeoutChange(30000)}
+                        className={`px-2 py-0.5 rounded cursor-pointer ${
+                          downloadSegmentTimeout === 30000
+                            ? 'bg-green-500 text-white'
+                            : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                        }`}
+                      >
+                        30秒
+                      </button>
+                      <button
+                        onClick={() => handleDownloadSegmentTimeoutChange(120000)}
+                        className={`px-2 py-0.5 rounded cursor-pointer ${
+                          downloadSegmentTimeout === 120000
+                            ? 'bg-green-500 text-white'
+                            : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                        }`}
+                      >
+                        2分钟
+                      </button>
+                      <button
+                        onClick={() => handleDownloadSegmentTimeoutChange(300000)}
+                        className={`px-2 py-0.5 rounded cursor-pointer ${
+                          downloadSegmentTimeout === 300000
+                            ? 'bg-green-500 text-white'
+                            : 'hover:bg-gray-200 dark:hover:bg-gray-700'
+                        }`}
+                      >
+                        5分钟
                       </button>
                     </div>
                   </div>
